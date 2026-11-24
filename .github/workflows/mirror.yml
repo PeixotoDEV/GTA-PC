@@ -1,0 +1,84 @@
+name: Espelhar Marvisak/VIctory
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # a cada 30 minutos (UTC; o GitHub pode atrasar alguns minutos)
+  workflow_dispatch:          # permite rodar manualmente pela aba Actions
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/Marvisak/VIctory.git
+  SYNC_BRANCH: sync           # branch deste workflow; nunca é apagado nem sobrescrito
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Comparar refs (sem baixar nada)
+        id: check
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOKEN" ]; then echo "::error::Secret MIRROR_TOKEN não configurado"; exit 1; fi
+          MIRROR="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git ls-remote --heads --tags "$UPSTREAM" | sort > upstream.txt
+          git ls-remote --heads --tags "$MIRROR" | grep -v "refs/heads/${SYNC_BRANCH}$" | sort > mirror.txt || true
+          if cmp -s upstream.txt mirror.txt; then
+            echo "Nenhuma mudança no original. Nada a fazer."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Mudanças detectadas:"; diff mirror.txt upstream.txt || true
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restaurar cópia em cache (busca só o que mudou)
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: repo.git
+          key: mirror-${{ github.run_id }}
+          restore-keys: mirror-
+
+      - name: Buscar novidades do original
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          if [ ! -d repo.git ]; then
+            git init --bare -q repo.git
+            git -C repo.git remote add upstream "$UPSTREAM"
+          fi
+          git -C repo.git fetch --prune --prune-tags upstream \
+            "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+
+      - name: Enviar para o espelho
+        if: steps.check.outputs.changed == 'true'
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          MIRROR="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          cd repo.git
+          # envia apenas branches/tags novos ou alterados (o git só manda os objetos que faltam)
+          git push --force "$MIRROR" "refs/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"
+          # remove do espelho o que foi apagado no original (exceto o branch de sync)
+          git for-each-ref --format='%(refname)' refs/heads refs/tags | sort > ../local.txt
+          git ls-remote --heads --tags "$MIRROR" | awk '{print $2}' | grep -v '\^{}$' \
+            | grep -v "^refs/heads/${SYNC_BRANCH}$" | sort > ../remote.txt
+          comm -13 ../local.txt ../remote.txt | while read -r ref; do
+            echo "Removendo $ref"; git push "$MIRROR" --delete "$ref"
+          done
+
+      - name: Salvar cópia em cache
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: repo.git
+          key: mirror-${{ github.run_id }}
