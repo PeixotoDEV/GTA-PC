@@ -7,4 +7,4 @@ Este branch (`sync`) guarda só a automação. **O código espelhado está no br
 - Só age quando há mudança: compara os refs com `git ls-remote` e, se forem iguais, termina sem baixar nada
 - Quando há mudança, busca e envia apenas o que é novo (cópia mantida em cache entre execuções)
 - Requer o secret `MIRROR_TOKEN` (token fine-grained com acesso só a este repositório: *Contents* e *Workflows* em Read and write)
-- O workflow `CI` vindo do original fica desativado aqui para não gastar minutos do Actions
+- Os workflows vindos do original (ex.: `CI`) são desativados automaticamente, e o repositório só permite as actions `actions/cache/restore` e `actions/cache/save`, para não gastar minutos do Actions

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: write   # só para desativar workflows vindos do original
 
 concurrency:
   group: mirror
@@ -75,6 +76,17 @@ jobs:
           comm -13 ../local.txt ../remote.txt | while read -r ref; do
             echo "Removendo $ref"; git push "$MIRROR" --delete "$ref"
           done
+
+      - name: Desativar workflows do original (para não gastar minutos)
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" \
+            --jq '.workflows[] | select(.path != ".github/workflows/mirror.yml" and .state == "active") | .id' \
+          | while read -r id; do
+              echo "Desativando workflow $id"; gh workflow disable "$id" -R "$GITHUB_REPOSITORY" || true
+            done
 
       - name: Salvar cópia em cache
         if: steps.check.outputs.changed == 'true'
